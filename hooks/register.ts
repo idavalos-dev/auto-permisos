@@ -89,6 +89,41 @@ async function leerReglas($: EngineInterface): Promise<string[]> {
   return Array.isArray(guardadas) ? guardadas.filter((r): r is string => typeof r === 'string') : REGLAS_POR_DEFECTO
 }
 
+// --- Reglas "ask" del proyecto ----------------------------------------------
+// Si el proyecto pidió en su .claude/settings.json que Claude pregunte algo
+// (permissions.ask), el plugin lo respeta y deja el cartel.
+const SHELLS = ['Bash', 'PowerShell']
+
+function reglaAskCoincide(regla: string, herramienta: string, comando: string): boolean {
+  const m = /^([^(]+)(?:\((.*)\))?$/.exec(regla.trim())
+  if (!m) return false
+  const nombre = m[1].trim()
+  const contenido = m[2]
+  const mismaHerramienta = nombre === herramienta || (SHELLS.includes(nombre) && SHELLS.includes(herramienta))
+  if (!mismaHerramienta) return false
+  if (contenido === undefined || contenido.trim() === '' || contenido.trim() === '*') return true
+  if (SHELLS.includes(herramienta)) {
+    const prefijo = contenido.replace(/:\*$/, '').replace(/\s*\*$/, '').trim().toLowerCase()
+    return prefijo === '' || comando.toLowerCase().includes(prefijo)
+  }
+  return true // otra herramienta con detalle: ante la duda, preguntar
+}
+
+async function reglasAskDelProyecto($: EngineInterface, cwd: string): Promise<string[]> {
+  const reglas: string[] = []
+  const base = cwd.replace(/[\\/]+$/, '')
+  for (const nombre of ['settings.json', 'settings.local.json']) {
+    try {
+      const datos = JSON.parse(String(await $.fs.read(`${base}/.claude/${nombre}`)))
+      const ask = datos?.permissions?.ask
+      if (Array.isArray(ask)) reglas.push(...ask.filter((x: unknown): x is string => typeof x === 'string'))
+    } catch {
+      // el archivo no existe o no se puede leer: no hay reglas de ese archivo
+    }
+  }
+  return reglas
+}
+
 async function anotar($: EngineInterface, entrada: Entrada): Promise<void> {
   const previo = await $.store.get('registro')
   const lista = Array.isArray(previo) ? (previo as Entrada[]) : []
@@ -119,14 +154,19 @@ export const register: Register = on => {
     if (CONFIG_DE_CLAUDE.test(archivo) || CONFIG_DE_CLAUDE.test(comando) ||
         ESTE_PLUGIN.test(archivo) || ESTE_PLUGIN.test(comando)) return preguntar()
 
-    // 3) Reglas de comandos peligrosos
+    // 3) Lo que el proyecto marcó como "preguntar" (permissions.ask)
+    for (const regla of await reglasAskDelProyecto($, e.cwd)) {
+      if (reglaAskCoincide(regla, herramienta, comando)) return preguntar()
+    }
+
+    // 4) Reglas de comandos peligrosos
     if (comando) {
       for (const regla of await leerReglas($)) {
         if (coincide(regla, comando)) return preguntar()
       }
     }
 
-    // 4) Todo lo demás: aprobado
+    // 5) Todo lo demás: aprobado
     await anotar($, { hora: hora(), resultado: 'PERMITIDO', herramienta, detalle })
     return { decision: { behavior: 'allow' as const } }
   }).catch(($, e, next) => next(e)) // si algo falla, aparece el cartel normal

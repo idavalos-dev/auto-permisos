@@ -10,9 +10,12 @@ Cada vez que Claude va a mostrar el cartel "¿Permitir?", el plugin decide:
 1. **Siempre te pregunta** (no se puede cambiar):
    - preguntas de Claude, aprobación de planes y control de pantalla;
    - cambios a la configuración de Claude (`settings.json`, plugins) o a este plugin.
-2. **Te pregunta si coincide con una regla**: borrar carpetas, `git push --force`,
+2. **Respeta lo que el proyecto pide preguntar**: si el `.claude/settings.json`
+   (o `settings.local.json`) del proyecto tiene reglas en `permissions.ask`,
+   esos comandos te los sigue preguntando.
+3. **Te pregunta si coincide con una regla**: borrar carpetas, `git push --force`,
    `git reset --hard`, apagar la PC, `taskkill`, etc. (31 reglas de fábrica).
-3. **Todo lo demás lo aprueba solo** y queda anotado en el registro.
+4. **Todo lo demás lo aprueba solo** y queda anotado en el registro.
 
 Si algo falla dentro del plugin, aparece el cartel normal: nunca aprueba por error.
 

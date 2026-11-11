@@ -51,6 +51,24 @@ test('sin reglas aprueba todo salvo las protecciones fijas', async ($, on) => {
   expect(config.decision).toBeUndefined()
 })
 
+test('respeta las reglas "ask" del proyecto', async ($, on) => {
+  preparar(on, { reglas: [] })
+  const settings = JSON.stringify({ permissions: { ask: ['Bash(npm run ajuste:*)', 'Bash(node src/ajuste-masivo-mobile.js:*)'] } })
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.replace(/\\/g, '/').endsWith('/.claude/settings.json')) return { value: settings }
+    throw new Error('no existe')
+  })
+
+  const ajuste = await $.classic.PermissionRequest(pedir('Bash', { command: 'npm run ajuste -- --todo' }))
+  expect(ajuste.decision).toBeUndefined()
+
+  const masivo = await $.classic.PermissionRequest(pedir('PowerShell', { command: 'cd x; node src/ajuste-masivo-mobile.js' }))
+  expect(masivo.decision).toBeUndefined()
+
+  const saldos = await $.classic.PermissionRequest(pedir('Bash', { command: 'npm run saldos' }))
+  expect(saldos.decision?.behavior).toBe('allow')
+})
+
 test('en pausa no aprueba nada', async ($, on) => {
   preparar(on, { pausado: true })
 
