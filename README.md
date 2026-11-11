@@ -67,9 +67,6 @@ o desde una terminal común:
 claude plugin install auto-permisos --marketplace idavalos-dev/auto-permisos
 ```
 
-El repositorio es privado: solo funciona para quien tenga acceso en GitHub y
-tenga GitHub configurado en su computadora (`gh auth login` y `gh auth setup-git`).
-
 En la app de escritorio: botón **+** junto al cuadro de texto → **Plugins** →
 **Add marketplace** → la carpeta o `idavalos-dev/auto-permisos` → **Add plugin**.
 
