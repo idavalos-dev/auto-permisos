@@ -1,0 +1,5 @@
+{
+  "name": "auto-permisos",
+  "version": "0.1.0",
+  "description": "Aprueba solos los permisos comunes de Claude y te sigue preguntando los peligrosos. Se maneja con /auto-permisos."
+}

@@ -1,0 +1,5 @@
+{
+  "name": "asistente-de-claude",
+  "owner": { "name": "Asistente de Claude" },
+  "plugins": [{ "name": "auto-permisos", "source": "./" }]
+}
