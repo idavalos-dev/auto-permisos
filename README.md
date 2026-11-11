@@ -46,20 +46,20 @@ claude plugin install auto-permisos@asistente-de-claude
 Desde GitHub, en una sesión de terminal de Claude Code:
 
 ```
-/plugin install auto-permisos --marketplace Mell1126/auto-permisos
+/plugin install auto-permisos --marketplace idavalos-dev/auto-permisos
 ```
 
 o desde una terminal común:
 
 ```
-claude plugin install auto-permisos --marketplace Mell1126/auto-permisos
+claude plugin install auto-permisos --marketplace idavalos-dev/auto-permisos
 ```
 
 El repositorio es privado: solo funciona para quien tenga acceso en GitHub y
 tenga GitHub configurado en su computadora (`gh auth login` y `gh auth setup-git`).
 
 En la app de escritorio: botón **+** junto al cuadro de texto → **Plugins** →
-**Add marketplace** → la carpeta o `Mell1126/auto-permisos` → **Add plugin**.
+**Add marketplace** → la carpeta o `idavalos-dev/auto-permisos` → **Add plugin**.
 
 ### Para un proyecto entero (también sesiones en la nube)
 
@@ -68,7 +68,7 @@ Agregá esto al `.claude/settings.json` del repositorio del proyecto:
 ```json
 {
   "extraKnownMarketplaces": {
-    "asistente-de-claude": { "source": { "source": "github", "repo": "Mell1126/auto-permisos" } }
+    "asistente-de-claude": { "source": { "source": "github", "repo": "idavalos-dev/auto-permisos" } }
   },
   "enabledPlugins": { "auto-permisos@asistente-de-claude": true }
 }
