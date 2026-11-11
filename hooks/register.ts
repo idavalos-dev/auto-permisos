@@ -52,11 +52,19 @@ const CONFIG_DE_CLAUDE = /[\\/]\.claude[\\/](settings[^\\/]*\.json|plugins[\\/])
 const ESTE_PLUGIN = /auto-permisos/i
 
 type Entrada = { hora: string; resultado: 'PERMITIDO' | 'PREGUNTA'; herramienta: string; detalle: string }
+type Chat = { id: string; carpeta: string; desde: string }
 
 const AYUDA = [
   'Uso de /auto-permisos:',
-  '  /auto-permisos                 estado actual',
-  '  /auto-permisos pausar          deja de aprobar (Claude pregunta todo)',
+  '  /auto-permisos                 estado actual (y si está activo en este chat)',
+  '  /auto-permisos aca             usarlo en este chat',
+  '  /auto-permisos no-aca          no usarlo en este chat',
+  '  /auto-permisos carpeta         usarlo en todos los chats de la carpeta de este chat',
+  '  /auto-permisos no-carpeta [N]  sacar esta carpeta (o la N de la lista de lugares)',
+  '  /auto-permisos modo todos      usarlo en todos los chats (salvo los apagados)',
+  '  /auto-permisos modo elegidos   usarlo solo en los chats y carpetas elegidos',
+  '  /auto-permisos lugares         dónde está prendido y dónde apagado',
+  '  /auto-permisos pausar          deja de aprobar en todos lados (Claude pregunta todo)',
   '  /auto-permisos reanudar        vuelve a aprobar',
   '  /auto-permisos reglas          lista los comandos que te sigue preguntando',
   '  /auto-permisos quitar 3        deja de preguntar la regla número 3',
@@ -97,7 +105,7 @@ const SHELLS = ['Bash', 'PowerShell']
 function reglaAskCoincide(regla: string, herramienta: string, comando: string): boolean {
   const m = /^([^(]+)(?:\((.*)\))?$/.exec(regla.trim())
   if (!m) return false
-  const nombre = m[1].trim()
+  const nombre = (m[1] ?? '').trim()
   const contenido = m[2]
   const mismaHerramienta = nombre === herramienta || (SHELLS.includes(nombre) && SHELLS.includes(herramienta))
   if (!mismaHerramienta) return false
@@ -124,10 +132,43 @@ async function reglasAskDelProyecto($: EngineInterface, cwd: string): Promise<st
   return reglas
 }
 
+// --- En qué chats funciona ---------------------------------------------------
+// modo "todos" (de fábrica): en todos los chats, salvo los apagados con "no-aca".
+// modo "elegidos": solo en los chats prendidos con "aca" y en las carpetas elegidas.
+async function lista<T>($: EngineInterface, clave: string): Promise<T[]> {
+  const v = await $.store.get(clave)
+  return Array.isArray(v) ? (v as T[]) : []
+}
+
+function normalizar(ruta: string): string {
+  return ruta.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function dentroDe(cwd: string, carpeta: string): boolean {
+  const a = normalizar(cwd)
+  const b = normalizar(carpeta)
+  return b !== '' && (a === b || a.startsWith(b + '/'))
+}
+
+async function activoAca($: EngineInterface, sesion: string, cwd: string): Promise<{ activo: boolean; motivo: string }> {
+  if ((await lista<string>($, 'fuera')).includes(sesion)) return { activo: false, motivo: 'apagado en este chat (/auto-permisos aca lo prende)' }
+  if ((await lista<Chat>($, 'chats')).some(c => c.id === sesion)) return { activo: true, motivo: 'prendido en este chat' }
+  const carpeta = (await lista<string>($, 'carpetas')).find(c => dentroDe(cwd, c))
+  if (carpeta) return { activo: true, motivo: `prendido en la carpeta ${carpeta}` }
+  return (await $.store.get('modo')) === 'elegidos'
+    ? { activo: false, motivo: 'modo "elegidos" y este chat no está elegido (/auto-permisos aca o carpeta)' }
+    : { activo: true, motivo: 'modo "todos los chats"' }
+}
+
+async function mostrarEstado($: EngineInterface, sesion: string, cwd: string): Promise<void> {
+  if ((await $.store.get('pausado')) === true) return $.ui.status('auto-permisos: en pausa')
+  $.ui.status((await activoAca($, sesion, cwd)).activo ? 'auto-permisos: activo' : 'auto-permisos: apagado acá')
+}
+
 async function anotar($: EngineInterface, entrada: Entrada): Promise<void> {
   const previo = await $.store.get('registro')
-  const lista = Array.isArray(previo) ? (previo as Entrada[]) : []
-  await $.store.set('registro', [...lista, entrada].slice(-100))
+  const anteriores = Array.isArray(previo) ? (previo as Entrada[]) : []
+  await $.store.set('registro', [...anteriores, entrada].slice(-100))
 }
 
 export const register: Register = on => {
@@ -135,6 +176,7 @@ export const register: Register = on => {
   // --- La decisión de cada permiso -----------------------------------------
   on('classic.PermissionRequest', async ($, e, next) => {
     if ((await $.store.get('pausado')) === true) return next(e)
+    if (!(await activoAca($, e.session_id, e.cwd)).activo) return next(e)
 
     const herramienta = e.tool_name
     const entrada = (e.tool_input ?? {}) as Record<string, unknown>
@@ -176,80 +218,127 @@ export const register: Register = on => {
     await $.command.register({
       name: 'auto-permisos',
       description: 'Ver o cambiar qué permisos se aprueban solos',
-      argumentHint: '[pausar | reanudar | reglas | quitar N | agregar regla | todo | restaurar | registro]',
+      argumentHint: '[aca | no-aca | carpeta | modo todos|elegidos | lugares | pausar | reanudar | reglas | registro]',
       immediate: true,
     })
-    $.ui.status((await $.store.get('pausado')) === true ? 'auto-permisos: en pausa' : undefined)
+    await mostrarEstado($, await $.session.id(), await $.session.root())
     return next(e)
   })
 
   on('command.run', { command: 'auto-permisos' }, async ($, e) => {
-    const [accion = '', ...resto] = e.args.trim().split(/\s+/).filter(Boolean)
-    const argumento = e.args.trim().slice(accion.length).trim()
+    const [crudo = '', ...resto] = e.args.trim().split(/\s+/).filter(Boolean)
+    const accion = crudo.toLowerCase().replace(/á/g, 'a')
+    const argumento = e.args.trim().slice(crudo.length).trim()
     const deLaPersona = ['composer', 'bridge', 'sdk'].includes(e.origin.kind)
-    const cambia = ['pausar', 'reanudar', 'quitar', 'agregar', 'todo', 'restaurar'].includes(accion.toLowerCase())
+    const cambia = ['pausar', 'reanudar', 'quitar', 'agregar', 'todo', 'restaurar',
+      'aca', 'no-aca', 'carpeta', 'no-carpeta', 'modo'].includes(accion)
     if (cambia && !deLaPersona) return { text: 'auto-permisos: solo vos podés cambiar esto, escribiendo el comando.' }
 
+    const sesion = await $.session.id()
+    const raiz = await $.session.root()
+    const respuesta = await responder($, accion, resto, argumento, sesion, raiz)
+    await mostrarEstado($, sesion, raiz)
+    return { text: respuesta }
+  })
+}
+
+async function responder($: EngineInterface, accion: string, resto: string[], argumento: string, sesion: string, raiz: string): Promise<string> {
     const reglas = await leerReglas($)
     const pausado = (await $.store.get('pausado')) === true
+    const chats = await lista<Chat>($, 'chats')
+    const fuera = await lista<string>($, 'fuera')
+    const carpetas = await lista<string>($, 'carpetas')
+    const modo = (await $.store.get('modo')) === 'elegidos' ? 'elegidos' : 'todos'
 
-    switch (accion.toLowerCase()) {
+    switch (accion) {
       case '':
-      case 'estado':
-        return {
-          text: [
-            pausado ? 'auto-permisos: EN PAUSA (Claude pregunta todo).' : 'auto-permisos: ACTIVO.',
+      case 'estado': {
+        const aca = await activoAca($, sesion, raiz)
+        return [
+            pausado ? 'auto-permisos: EN PAUSA en todos lados (Claude pregunta todo).'
+              : `auto-permisos en este chat: ${aca.activo ? 'ACTIVO' : 'APAGADO'} (${aca.motivo}).`,
+            `Modo: ${modo === 'todos' ? 'todos los chats' : 'solo chats y carpetas elegidos'}.`,
             reglas.length === 0
               ? 'Sin reglas: aprueba todo salvo las protecciones fijas.'
               : `${reglas.length} reglas de comandos que te sigue preguntando (/auto-permisos reglas).`,
             '',
             AYUDA,
-          ].join('\n'),
-        }
+          ].join('\n')
+      }
+      case 'aca':
+        await $.store.set('fuera', fuera.filter(id => id !== sesion))
+        if (!chats.some(c => c.id === sesion)) await $.store.set('chats', [...chats, { id: sesion, carpeta: raiz, desde: hora() }])
+        return 'Listo: en este chat los permisos comunes se aprueban solos.'
+      case 'no-aca':
+        await $.store.set('chats', chats.filter(c => c.id !== sesion))
+        if (!fuera.includes(sesion)) await $.store.set('fuera', [...fuera, sesion])
+        return 'Listo: en este chat Claude te pregunta todo, como siempre. Para volver: /auto-permisos aca'
+      case 'carpeta':
+        if (carpetas.some(c => normalizar(c) === normalizar(raiz))) return `La carpeta ${raiz} ya estaba elegida.`
+        await $.store.set('carpetas', [...carpetas, raiz])
+        return `Listo: todos los chats de ${raiz} (y sus subcarpetas) aprueban solos, salvo los que apagues con /auto-permisos no-aca.`
+      case 'no-carpeta': {
+        const n = Number(resto[0])
+        const sacar = resto[0] === undefined ? carpetas.find(c => normalizar(c) === normalizar(raiz))
+          : Number.isInteger(n) && n >= 1 && n <= carpetas.length ? carpetas[n - 1] : undefined
+        if (!sacar) return resto[0] === undefined ? `La carpeta ${raiz} no estaba elegida.` : 'Número inválido. Mirá la lista con /auto-permisos lugares.'
+        await $.store.set('carpetas', carpetas.filter(c => c !== sacar))
+        return `Listo: saqué la carpeta ${sacar}.`
+      }
+      case 'modo': {
+        const nuevo = (resto[0] ?? '').toLowerCase()
+        if (nuevo !== 'todos' && nuevo !== 'elegidos') return 'Escribí /auto-permisos modo todos  o  /auto-permisos modo elegidos'
+        await $.store.set('modo', nuevo)
+        return nuevo === 'todos'
+          ? 'Modo "todos": funciona en todos los chats, salvo los que apagaste con no-aca.'
+          : 'Modo "elegidos": funciona solo en los chats donde escribiste /auto-permisos aca y en las carpetas elegidas.'
+      }
+      case 'lugares':
+        return [
+          `Modo: ${modo === 'todos' ? 'todos los chats' : 'solo chats y carpetas elegidos'}.`,
+          'Carpetas elegidas:',
+          ...(carpetas.length ? carpetas.map((c, i) => `  ${i + 1}. ${c}`) : ['  (ninguna)']),
+          `Chats prendidos a mano: ${chats.length}${chats.length ? '' : ' (ninguno)'}`,
+          ...chats.map(c => `  - desde ${c.desde} en ${c.carpeta}${c.id === sesion ? '  <- este chat' : ''}`),
+          `Chats apagados a mano: ${fuera.length}${fuera.includes(sesion) ? ' (incluye este)' : ''}`,
+        ].join('\n')
       case 'pausar':
         await $.store.set('pausado', true)
-        $.ui.status('auto-permisos: en pausa')
-        return { text: 'auto-permisos en pausa: Claude vuelve a preguntar todo.' }
+        return 'auto-permisos en pausa en todos los chats: Claude vuelve a preguntar todo.'
       case 'reanudar':
         await $.store.set('pausado', false)
-        $.ui.status(undefined)
-        return { text: 'auto-permisos activo de nuevo.' }
+        return 'auto-permisos activo de nuevo.'
       case 'reglas':
-        return {
-          text: reglas.length === 0
-            ? 'No hay reglas: se aprueba todo salvo las protecciones fijas.'
-            : 'Comandos que te sigue preguntando:\n' + reglas.map((r, i) => `  ${i + 1}. ${r}`).join('\n'),
-        }
+        return reglas.length === 0
+          ? 'No hay reglas: se aprueba todo salvo las protecciones fijas.'
+          : 'Comandos que te sigue preguntando:\n' + reglas.map((r, i) => `  ${i + 1}. ${r}`).join('\n')
       case 'quitar': {
         const n = Number(resto[0])
-        if (!Number.isInteger(n) || n < 1 || n > reglas.length) return { text: `Número inválido. Mirá la lista con /auto-permisos reglas (1 a ${reglas.length}).` }
+        if (!Number.isInteger(n) || n < 1 || n > reglas.length) return `Número inválido. Mirá la lista con /auto-permisos reglas (1 a ${reglas.length}).`
         const sacada = reglas[n - 1]
         await $.store.set('reglas', reglas.filter((_, i) => i !== n - 1))
-        return { text: `Listo: ya no te pregunta por "${sacada}".` }
+        return `Listo: ya no te pregunta por "${sacada}".`
       }
       case 'agregar': {
-        if (!argumento) return { text: 'Escribí la regla, por ejemplo: /auto-permisos agregar npm\\s+publish' }
-        try { new RegExp(argumento, 'i') } catch { return { text: `La regla "${argumento}" está mal escrita.` } }
+        if (!argumento) return 'Escribí la regla, por ejemplo: /auto-permisos agregar npm\\s+publish'
+        try { new RegExp(argumento, 'i') } catch { return `La regla "${argumento}" está mal escrita.` }
         await $.store.set('reglas', [...reglas, argumento])
-        return { text: `Listo: te va a preguntar por "${argumento}".` }
+        return `Listo: te va a preguntar por "${argumento}".`
       }
       case 'todo':
         await $.store.set('reglas', [])
-        return { text: 'Listo: aprueba todo. Solo te sigue preguntando cambios a la configuración de Claude, preguntas de Claude, planes y control de pantalla. Para volver atrás: /auto-permisos restaurar' }
+        return 'Listo: aprueba todo. Solo te sigue preguntando cambios a la configuración de Claude, preguntas de Claude, planes y control de pantalla. Para volver atrás: /auto-permisos restaurar'
       case 'restaurar':
         await $.store.set('reglas', REGLAS_POR_DEFECTO)
-        return { text: `Reglas de fábrica restauradas (${REGLAS_POR_DEFECTO.length}).` }
+        return `Reglas de fábrica restauradas (${REGLAS_POR_DEFECTO.length}).`
       case 'registro': {
         const previo = await $.store.get('registro')
-        const lista = (Array.isArray(previo) ? (previo as Entrada[]) : []).slice(-20)
-        return {
-          text: lista.length === 0
-            ? 'Todavía no hay decisiones registradas.'
-            : lista.map(x => `${x.hora}  ${x.resultado.padEnd(9)} ${x.herramienta}  ${x.detalle}`).join('\n'),
-        }
+        const ultimas = (Array.isArray(previo) ? (previo as Entrada[]) : []).slice(-20)
+        return ultimas.length === 0
+          ? 'Todavía no hay decisiones registradas.'
+          : ultimas.map(x => `${x.hora}  ${x.resultado.padEnd(9)} ${x.herramienta}  ${x.detalle}`).join('\n')
       }
       default:
-        return { text: AYUDA }
+        return AYUDA
     }
-  })
 }

@@ -1,5 +1,5 @@
 {
   "name": "auto-permisos",
-  "version": "0.2.0",
-  "description": "Aprueba solos los permisos comunes de Claude y te sigue preguntando los peligrosos. Se maneja con /auto-permisos."
+  "version": "0.3.0",
+  "description": "Aprueba solos los permisos comunes de Claude y te sigue preguntando los peligrosos, en todos los chats o solo en los que elijas. Se maneja con /auto-permisos."
 }

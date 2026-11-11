@@ -69,6 +69,29 @@ test('respeta las reglas "ask" del proyecto', async ($, on) => {
   expect(saldos.decision?.behavior).toBe('allow')
 })
 
+test('modo elegidos: solo aprueba en chats y carpetas elegidos', async ($, on) => {
+  preparar(on, {
+    modo: 'elegidos',
+    chats: [{ id: 'chat-elegido', carpeta: 'C:\\otra', desde: 'x' }],
+    carpetas: ['C:\\Users\\x\\Proyecto'],
+    fuera: ['chat-apagado'],
+  })
+  const en = (session_id: string, cwd: string) => ({ ...pedir('Bash', { command: 'npm install' }), session_id, cwd })
+
+  expect((await $.classic.PermissionRequest(en('chat-elegido', 'D:\\cualquiera'))).decision?.behavior).toBe('allow')
+  expect((await $.classic.PermissionRequest(en('chat-nuevo', 'c:/users/x/proyecto/sub'))).decision?.behavior).toBe('allow')
+  expect((await $.classic.PermissionRequest(en('chat-nuevo', 'C:\\Users\\x\\ProyectoB'))).decision).toBeUndefined()
+  expect((await $.classic.PermissionRequest(en('chat-apagado', 'C:\\Users\\x\\Proyecto'))).decision).toBeUndefined()
+})
+
+test('modo todos: aprueba en todos salvo los apagados', async ($, on) => {
+  preparar(on, { fuera: ['chat-apagado'] })
+  const en = (session_id: string) => ({ ...pedir('Bash', { command: 'npm install' }), session_id })
+
+  expect((await $.classic.PermissionRequest(en('cualquiera'))).decision?.behavior).toBe('allow')
+  expect((await $.classic.PermissionRequest(en('chat-apagado'))).decision).toBeUndefined()
+})
+
 test('en pausa no aprueba nada', async ($, on) => {
   preparar(on, { pausado: true })
 
